@@ -487,6 +487,7 @@ predict_models <- function(model, model_name, nonsparse_mat) {
 
 
 Unit test 1: all remaining cells assigned to internal nodes
+Unit test 2: expected number of elements returned
 ```{r}
 Classify <- function(bpcells_query, models, tree_struc) {
   # initial rootnode level - do all at once. All tree_struc have rootnodes, even if all clusters are at one level
@@ -539,13 +540,17 @@ Classify <- function(bpcells_query, models, tree_struc) {
       group_by(obs) %>%
       dplyr::count(class, name = "count") %>%
       dplyr::group_by(obs) %>%
-      dplyr::filter(count == max(count)) %>%
-      #dplyr::filter(count > count_threshold) %>%
+      dplyr::filter(count == max(count)) 
+    #filter obs with mult max classes
+    tied_obs <- obs_above_threshold %>% group_by(obs) %>% summarise(n = n()) %>% filter(n > 1) %>% pull(obs)
+    obs_above_threshold <- obs_above_threshold %>% 
+      dplyr::filter(!obs %in% tied_obs) %>% 
+      dplyr::filter(count >= count_threshold) %>%
       pull(class, name = obs)
     ## assign "tip" cells to final classification
     tip_cells <- obs_above_threshold[obs_above_threshold %in% tipnodes]
     final_classifications <- final_classifications %>% append(tip_cells)
-    ## assign "stuck" cells to final classification
+    ## assign "stuck" cells to final classification - ties/not threshold
     stuck_cells <- rownames(first_lev_bpcells)[!rownames(first_lev_bpcells) %in% names(final_classifications) & !rownames(first_lev_bpcells) %in% names(obs_above_threshold)] %>% set_names(., .)
     stuck_cells <- rep(node, length(stuck_cells))
     names(stuck_cells) <- rownames(first_lev_bpcells)[!rownames(first_lev_bpcells) %in% names(final_classifications) & !rownames(first_lev_bpcells) %in% names(obs_above_threshold)]
@@ -563,10 +568,14 @@ Classify <- function(bpcells_query, models, tree_struc) {
       }
     }
   }
+  test_that("expected number of elements returned", {
+    expect_equal(length(final_classifications), ncol(bpcells_query))
+    })
   final_classifications
 }
 ```
 
+  X188_batch2   X368_batch2 X45.G2_batch1 
 
 Code run during testing
 ```{r}
@@ -586,13 +595,5 @@ pseq_metadata <- Classify(pseq_sample, models, tree_broad)
 
 ```{r}
 #rstudioapi::documentSave()
+#knitr::purl("bpcells_utils_mapping.Rmd")
 ```
-
-
-
-
-
-```{r, purl=FALSE}
-#knitr::purl("Utils_mapping.Rmd")
-```
-
