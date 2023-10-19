@@ -232,7 +232,7 @@ Find Marker Genes using a BPCells reference object.
 Unit tests:
 1) ref_bpcells object is a bpcells object
 ```{r}
-FindMarkerGenes = function(ref_bpcells, ref_metadata, tree, n_genes = 5, metadata_cluster_column = "cluster_label", metadata_cell_label_column = "cell_label") {
+FindMarkerGenes = function(ref_bpcells, ref_metadata, tree, n_genes = 5, metadata_cluster_column = "cluster_label", metadata_cell_label_column = "cell_label",n_cells_sampled = 500) {
   #Unit test 1: ref_bpcells is a bpcells object - else throw error
   test_that("ref_bpcells param is a bpcells object", {
     expect_equal(class(ref_bpcells) %>% attr("package"),"BPCells")
@@ -299,10 +299,18 @@ FindMarkerGenes = function(ref_bpcells, ref_metadata, tree, n_genes = 5, metadat
       list_with_matchups[[j]] <- list("compared_nodes" = compared_nodes)
       names(list_with_matchups)[j] <- paste0(node1, " vs ", node2)
       #match colnames with class
-      cells_node1 <- ref_metadata[ref_metadata[,metadata_cluster_column] %in% c(node1_tip_nodes),metadata_cell_label_column]
-      cells_node2 <- ref_metadata[ref_metadata[,metadata_cluster_column] %in% c(node2_tip_nodes),metadata_cell_label_column]
-      subset_atlas <-ref_bpcells[, c(cells_node1, cells_node2)] %>% transpose_storage_order()
-      celltype_labels <- c(rep(node1, length(cells_node1)), rep(node2, length(cells_node2))) %>% as.factor()
+      cells_node_1 <- ref_metadata[ref_metadata[,metadata_cluster_column] %in% c(node1_tip_nodes),metadata_cell_label_column]
+      cells_node_2 <- ref_metadata[ref_metadata[,metadata_cluster_column] %in% c(node2_tip_nodes),metadata_cell_label_column]
+      #sample cells
+      if(length(cells_node_1) > n_cells_sampled) {
+        cells_node_1 <- cells_node_1 %>% sample(n_cells_sampled)
+      }
+      if(length(cells_node_2) > n_cells_sampled) {
+        cells_node_2 <- cells_node_2 %>% sample(n_cells_sampled)
+      }
+      
+      subset_atlas <-ref_bpcells[, c(cells_node_1, cells_node_2)] %>% transpose_storage_order()
+      celltype_labels <- c(rep(node1, length(cells_node_1)), rep(node2, length(cells_node_2))) %>% as.factor()
       pairwise_markers <- marker_features(subset_atlas, celltype_labels, method = "wilcoxon")
       #remove genes with less than 1 logCPM in either 
       pairwise_markers %<>% filter(foreground_mean > 1 |background_mean > 1) %>% select(-background) %>% distinct(feature, .keep_all = TRUE) %>% mutate(log2_fc = log2(foreground_mean/background_mean))
@@ -498,7 +506,9 @@ LoadBPCellsFromTable <- function(filename, dir_name = "new_dataset") {
 ```{r}
 #only keeps genes found in both datasets 
 AlignBPCellsObjs <- function(bpcells_obj1, bpcells_obj2) {
-  keep_genes = intersect(rownames(bpcells_obj1), rownames(bpcells_obj2))
+  #only keep genes with at least 1 cell expressed and found in both datasets
+  genes_expressed <- rowSums(bpcells_obj1) %>% .[.!=0] %>% names() 
+  keep_genes = intersect(rownames(bpcells_obj1), rownames(bpcells_obj2)) %>% .[. %in% genes_expressed]
   bpcells_obj1 = bpcells_obj1[keep_genes,]
   bpcells_obj1
 }
