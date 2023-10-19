@@ -22,6 +22,7 @@ library(tidyr)
 library(Matrix)
 library(testthat)
 library(BPCells)
+require(stringr)
 options("print.matrix" = FALSE)
 ```
 
@@ -231,7 +232,7 @@ Find Marker Genes using a BPCells reference object.
 Unit tests:
 1) ref_bpcells object is a bpcells object
 ```{r}
-FindMarkerGenes = function(ref_bpcells, ref_metadata, tree, n_genes = 5, metadata_cluster_column = "cluster_label") {
+FindMarkerGenes = function(ref_bpcells, ref_metadata, tree, n_genes = 5, metadata_cluster_column = "cluster_label", metadata_cell_label_column = "cell_label") {
   #Unit test 1: ref_bpcells is a bpcells object - else throw error
   test_that("ref_bpcells param is a bpcells object", {
     expect_equal(class(ref_bpcells) %>% attr("package"),"BPCells")
@@ -256,14 +257,24 @@ FindMarkerGenes = function(ref_bpcells, ref_metadata, tree, n_genes = 5, metadat
   child_node_labels <- direct_child_nodes %>% unlist(use.names = F)
   descendant_tip_nodes <- vector(mode = "list", length = length(child_node_labels))
   names(descendant_tip_nodes) <- child_node_labels
-  for (i in 1:length(child_node_labels)) {
-    descendant_tip_nodes[[i]] <- offspring(tree,child_node_labels[i], type = "tips") %>% nodelab(tree,.)
-  }
-  #remove tip nodes from the above list of lists (they don't have any children nodes so their positions will have a length of 0)
-  descendant_tip_nodes <- descendant_tip_nodes[lapply(descendant_tip_nodes,length)>0]
-  specified_tip_nodes <- descendant_tip_nodes %>% unlist(use.names = F) %>% unique()
-  
+
   #add functionality for same-level classification only (tree structure is useless in this case)
+  if(length(internal_nodes) == 1) {
+      for (i in 1:length(child_node_labels)) {
+      descendant_tip_nodes[[i]] <- child_node_labels[i]
+    }
+      
+  } else {
+    for (i in 1:length(child_node_labels)) {
+      descendant_tip_nodes[[i]] <- offspring(tree,child_node_labels[i], type = "tips") %>% nodelab(tree,.)
+    }
+    #remove tip nodes from the above list of lists (they don't have any children nodes so their positions will have a length of 0)
+    descendant_tip_nodes <- descendant_tip_nodes[lapply(descendant_tip_nodes,length)>0]
+    specified_tip_nodes <- descendant_tip_nodes %>% unlist(use.names = F) %>% unique()
+    
+    
+  }
+  
   for (i in 1:length(internal_nodes)) { #iterate over each parent node
     specified_ancestor_node <- names(direct_child_nodes)[i]
     direct_children_of_specified_ancestor_nodes_vector <- direct_child_nodes[[specified_ancestor_node]]
@@ -288,8 +299,8 @@ FindMarkerGenes = function(ref_bpcells, ref_metadata, tree, n_genes = 5, metadat
       list_with_matchups[[j]] <- list("compared_nodes" = compared_nodes)
       names(list_with_matchups)[j] <- paste0(node1, " vs ", node2)
       #match colnames with class
-      cells_node1 <- ref_metadata$cell_label[ref_metadata[,metadata_cluster_column] %in% c(node1_tip_nodes)]
-      cells_node2 <- ref_metadata$cell_label[ref_metadata[,metadata_cluster_column] %in% c(node2_tip_nodes)]
+      cells_node1 <- ref_metadata[ref_metadata[,metadata_cluster_column] %in% c(node1_tip_nodes),metadata_cell_label_column]
+      cells_node2 <- ref_metadata[ref_metadata[,metadata_cluster_column] %in% c(node2_tip_nodes),metadata_cell_label_column]
       subset_atlas <-ref_bpcells[, c(cells_node1, cells_node2)] %>% transpose_storage_order()
       celltype_labels <- c(rep(node1, length(cells_node1)), rep(node2, length(cells_node2))) %>% as.factor()
       pairwise_markers <- marker_features(subset_atlas, celltype_labels, method = "wilcoxon")
@@ -335,7 +346,7 @@ Steps:
 
 Unit test 1: Same Number rows in pca-transformed matrix as number of cells in each class for 1st matchup in 1st class
 ```{r}
-GetModels <- function(marker_genes, ref_bpcells, ref_metadata, tree, metadata_cluster_label = "cluster_label") {
+GetModels <- function(marker_genes, ref_bpcells, ref_metadata, tree, metadata_cluster_column = "cluster_label", metadata_cell_label_column = "cell_label", n_cells_sampled = 500) {
  #1) Normalize reference atlas.
   # Normalize by reads-per-cell
   ref_bpcells <- multiply_cols(ref_bpcells, 1/Matrix::colSums(ref_bpcells))
@@ -365,17 +376,18 @@ GetModels <- function(marker_genes, ref_bpcells, ref_metadata, tree, metadata_cl
         node1_tip_nodes <- tree %>% offspring(node1, type = "tips") %>% nodelab(tree,.)
       }
       if(node2 %in% tipnodes) {
-      node2_tip_nodes <- node2
+          node2_tip_nodes <- node2
       } else {
         node2_tip_nodes <- tree %>% offspring(node2, type = "tips") %>% nodelab(tree,.)
       }
       
       #if on tip node
-      cells_node1 <- ref_metadata$cell_label[ref_metadata[,metadata_cluster_label] %in% node1_tip_nodes]
-      cells_node2 <- ref_metadata$cell_label[ref_metadata[,metadata_cluster_label] %in% node2_tip_nodes]
+      cells_node_1 <- ref_metadata[ref_metadata[,metadata_cluster_column] %in% c(node1_tip_nodes),metadata_cell_label_column]
+      cells_node_2 <- ref_metadata[ref_metadata[,metadata_cluster_column] %in% c(node2_tip_nodes),metadata_cell_label_column]
+
       matchup_marker_genes <- marker_genes[[i]][[j]]$marker_genes
       #subset to only have particular genes and cells. Cells are ordered on whether they're from cell 1 or cell 2.
-      subset_dataset <- ref_bpcells[c(cells_node1, cells_node2), matchup_marker_genes]
+      subset_dataset <- ref_bpcells[c(cells_node_1, cells_node_2), matchup_marker_genes]
       #get average expression and variance of each gene in log normalized space 
       gene_level_stats <- matrix_stats(subset_dataset, col_stats = "variance")$col_stats
       avg_log_exp <-  gene_level_stats["mean",]
@@ -383,15 +395,25 @@ GetModels <- function(marker_genes, ref_bpcells, ref_metadata, tree, metadata_cl
       stdev <- gene_level_stats["variance",] %>% sqrt()
       #z-score dataset
       subset_dataset <- subset_dataset %>% add_cols(-avg_log_exp) %>% multiply_cols(1/stdev)
+      #sample n_cells_sampled # of cells from each node   
+      if(length(cells_node_1) > n_cells_sampled) {
+        cells_node_1 <- cells_node_1 %>% sample(n_cells_sampled)
+      }
+      if(length(cells_node_2) > n_cells_sampled) {
+        cells_node_2 <- cells_node_2 %>% sample(n_cells_sampled)
+      }
+      subset_dataset <- subset_dataset[c(cells_node_1,cells_node_2),]
+      
+      
       #write to memory to make it easier to load datasets
-      subset_dataset <- subset_dataset %>% write_matrix_memory(compress=FALSE)
+      subset_dataset <- subset_dataset %>% write_matrix_dir(tempfile("classify_mat"))
       #perform pca
       marker_ge_pca <- prcomp(subset_dataset, center = F, rank = 3)
       
       #Unit test 1: 
       if (i ==1 & j ==1) {
         test_that("Same Number rows in pca-transformed matrix as number of cells in each class for 1st matchup in 1st class", {
-    expect_equal(marker_ge_pca$x %>% nrow(), length(cells_node1) + length(cells_node2))
+    expect_equal(marker_ge_pca$x %>% nrow(), length(cells_node_1) + length(cells_node_2))
   })
       }
         
@@ -399,7 +421,7 @@ GetModels <- function(marker_genes, ref_bpcells, ref_metadata, tree, metadata_cl
       #save pca loadings (contribution of each variable to each pc) to variable, to use for later prediction
       #get labels for each cell in the training dataset in order of how it appears 
       #reorder to get all node1 cells then node2 cells
-      celltype_labels <- c(rep(node1, length(cells_node1)), rep(node2, length(cells_node2))) %>% as.factor()
+      celltype_labels <- c(rep(node1, length(cells_node_1)), rep(node2, length(cells_node_2))) %>% as.factor()
       classification_models <- CreateAllModels(marker_ge_pca$x, celltype_labels)
       
       model_list[[i]][[j]] <- model_list[[i]][[j]] %>% as.list()
@@ -448,16 +470,30 @@ CreateBroadTree <- function(ref_metadata, metadata_field = "cluster_label") {
 ```{r}
 GetBPCellsSampleDataset <- function() {
   jax_dataset <- data.table::fread(file = "~/Desktop/Patch-Seq/Batch 1-2 results/mm39-5xFAD alignment/salmon.merged.gene_counts.tsv") %>% .[,2:ncol(.)] %>% as.data.frame()
-  #remove genes with multiple ENS IDs that map to a gene (~40 ENS Ids removed)
+  #remove duplicate genes 
   removed_gene_names <- jax_dataset$gene_name[duplicated(jax_dataset$gene_name)]
   jax_dataset <- jax_dataset[!duplicated(jax_dataset$gene_name), ]
   rownames(jax_dataset) <- jax_dataset$gene_name
   jax_dataset <- jax_dataset %>% .[,2:ncol(.)]
-  #enter into seurat,
+  #write bpcells
   jax_dataset <- jax_dataset %>% as("Matrix") %>% as("dgCMatrix") %>% as("IterableMatrix") %>% write_matrix_dir("pseq_sample", overwrite = T)
   open_matrix_dir("pseq_sample")
 }
 ```
+
+```{r}
+LoadBPCellsFromTable <- function(filename, dir_name = "new_dataset") {
+  dataset <- data.table::fread(filename) %>% .[,2:ncol(.)] %>% as.data.frame()
+  removed_gene_names <- dataset$gene_name[duplicated(dataset$gene_name)]
+  dataset <- dataset[!duplicated(dataset$gene_name), ]
+  rownames(dataset) <- dataset$gene_name
+  dataset <- dataset %>% .[,2:ncol(.)]
+  #write bpcells
+  dataset <- dataset %>% as("Matrix") %>% as("dgCMatrix") %>% as("IterableMatrix") %>% write_matrix_dir(paste0(dir_name), overwrite = T)
+  open_matrix_dir(dir_name)
+}
+```
+
 
 ```{r}
 #only keeps genes found in both datasets 
@@ -500,7 +536,7 @@ Classify <- function(bpcells_query, models, tree_struc) {
   # Log normalization
   bpcells_query <- log1p(bpcells_query * 10000) # Log normalization
   # save to disk to make it quick
-  query_cells <- bpcells_query %>% write_matrix_dir(tempfile("mat"), compress = F)
+  query_cells <- bpcells_query %>% write_matrix_dir(tempfile("mat"))
 
   # get internal nodes in hierarchical order
   internal_nodes <- c(rootnode, offspring(tree_struc, rootnode) %>% nodelab(tree_struc, .) %>% .[-which(. %in% nodelab(tree_struc, offspring(tree_struc, rootnode, type = "tips")))])
@@ -537,7 +573,7 @@ Classify <- function(bpcells_query, models, tree_struc) {
       plyr::rbind.fill.matrix(res_list) %>%
       as.data.frame() %>%
       tidyr::pivot_longer(everything(), names_to = "obs", values_to = "class") %>%
-      group_by(obs) %>%
+      dplyr::group_by(obs) %>%
       dplyr::count(class, name = "count") %>%
       dplyr::group_by(obs) %>%
       dplyr::filter(count == max(count)) 
@@ -575,22 +611,25 @@ Classify <- function(bpcells_query, models, tree_struc) {
 }
 ```
 
-  X188_batch2   X368_batch2 X45.G2_batch1 
-
 Code run during testing
 ```{r}
 dense_ref <-LoadDenseReferenceAtlas()
 ref_metadata <- dense_ref@meta.data
 ref_metadata$cell_label <- ref_metadata$sample_name
 WriteBPCellsReferenceAtlas("ref_atlas_bpcells")
-ref_bpcells <- LoadBPCellsObj("ref_atlas_bpcells")
-pseq_sample <- GetBPCellsSampleDataset()
+ref_bpcells <- LoadBPCellsObj("../../")
+pseq_sample <- LoadBPCellsFromTable("~/Desktop/Patch-Seq/Batch 1-2 results/mm39-5xFAD alignment/salmon.merged.gene_counts.tsv", dir_name = "~/pseq_sample")
 pseq_sample <- AlignBPCellsObjs(pseq_sample, ref_bpcells)
 ref_bpcells <- AlignBPCellsObjs(ref_bpcells, pseq_sample)
 tree_broad <- CreateBroadTree(ref_metadata)
-markers <- FindMarkerGenes(ref_bpcells, ref_metadata, tree_broad)
+markers <- FindMarkerGenes(ref_bpcells, ref_metadata, tree_broad, )
+
+
+
 models <- GetModels(markers, ref_bpcells, ref_metadata, tree_broad)
 pseq_metadata <- Classify(pseq_sample, models, tree_broad)
+
+
 ```
 
 ```{r}
